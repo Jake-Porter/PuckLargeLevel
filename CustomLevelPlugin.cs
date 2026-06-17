@@ -9,6 +9,7 @@ using Unity.Netcode;
 public class CustomLevelPlugin : IPuckPlugin
 {
     private static GameObject spawnedLevel;
+    private static GameObject spawnedClientLevel;
     private static AssetBundle bundle;
     private Harmony harmony;
     private static bool _practiceHelperPatched;
@@ -155,6 +156,20 @@ public class CustomLevelPlugin : IPuckPlugin
     {
         try
         {
+            // LevelController.Awake fires for every scene that has one — including the locker room.
+            // We only want to swap geometry in the actual game level scene.
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            if (sceneName != "level_default")
+            {
+                Debug.Log($"[CustomLevel] Skipping level swap in scene '{sceneName}'");
+                return;
+            }
+
+            // Destroy any level geometry left over from a previous session so we never
+            // accumulate stacked copies across scene transitions.
+            if (spawnedLevel != null) { GameObject.Destroy(spawnedLevel); spawnedLevel = null; }
+            if (spawnedClientLevel != null) { GameObject.Destroy(spawnedClientLevel); spawnedClientLevel = null; }
+
             Debug.Log("[CustomLevel] Level awoke, swapping geometry");
 
             TryPatchPracticeHelpers();
@@ -290,7 +305,8 @@ public class CustomLevelPlugin : IPuckPlugin
                             meshToMaterial[r.gameObject.name + "_" + i] = r.sharedMaterials[i].name.ToLower();
                 }
 
-                GameObject clientLevel = GameObject.Instantiate(prefab);
+                spawnedClientLevel = GameObject.Instantiate(prefab);
+                GameObject clientLevel = spawnedClientLevel;
                 clientLevel.name = "CustomLevel_Client";
                 clientLevel.transform.position = Vector3.zero;
 
@@ -359,7 +375,8 @@ public class CustomLevelPlugin : IPuckPlugin
         ProtectedPucks.Clear();
         ChatInputActive = false;
 
-        if (spawnedLevel != null) GameObject.Destroy(spawnedLevel);
+        if (spawnedLevel != null) { GameObject.Destroy(spawnedLevel); spawnedLevel = null; }
+        if (spawnedClientLevel != null) { GameObject.Destroy(spawnedClientLevel); spawnedClientLevel = null; }
         if (bundle != null) { bundle.Unload(true); bundle = null; }
 
         return true;
