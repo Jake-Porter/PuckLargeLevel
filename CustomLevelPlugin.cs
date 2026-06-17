@@ -180,20 +180,23 @@ public class CustomLevelPlugin : IPuckPlugin
 
             Debug.Log($"[CustomLevel] IsServer={isServer} IsClient={isClient}");
 
-            // Exact-name targets
-            string[] toHide = {
+            // Build a lookup set so we can check every GameObject's name in one pass.
+            // GameObject.Find returns only the FIRST match, so two nets (one per goal)
+            // would leave the second one visible — iterating all objects avoids that.
+            var hideNames = new System.Collections.Generic.HashSet<string>(
+                System.StringComparer.Ordinal)
+            {
                 "Rink", "Hangar", "Blue Goal", "Red Goal", "Goal Blue", "Goal Red",
                 "Scoreboard Blue", "Scoreboard Red", "Lights",
                 "Spectator Booth 1","Spectator Booth 2","Spectator Booth 3","Spectator Booth 4",
                 "Spectator Booth 5","Spectator Booth 6","Spectator Booth 7","Spectator Booth 8",
                 "Spectator Booth 9","Spectator Booth 10",
-                // Net/goal child objects discovered via keyword sweep logs
                 "Net", "Net Collider", "Goal Post Collider", "Goal Trigger", "Goal Player Collider",
             };
-            foreach (string hideName in toHide)
+            foreach (var go in GameObject.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
             {
-                var go = GameObject.Find(hideName);
-                if (go != null) { go.SetActive(false); Debug.Log($"[CustomLevel] Hid {hideName}"); }
+                if (go != null && hideNames.Contains(go.name))
+                { go.SetActive(false); Debug.Log($"[CustomLevel] Hid {go.name}"); }
             }
 
             if (bundle == null) { Debug.LogError("[CustomLevel] Bundle is null"); return; }
