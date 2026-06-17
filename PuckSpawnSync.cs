@@ -4,6 +4,7 @@ using UnityEngine;
 using Unity.Netcode;
 using Unity.Collections;
 
+
 public class PuckSpawnSync : MonoBehaviour
 {
     private const string SpawnPuckMessage = "CustomLevel_SpawnPuck";
@@ -102,25 +103,16 @@ public class PuckSpawnSync : MonoBehaviour
         Debug.Log($"[CustomLevel] Spawned puck for client {senderClientId} at {spawnPos}");
     }
 
-    private static bool IsAnyInputFieldFocused()
-    {
-        foreach (var f in UnityEngine.Object.FindObjectsByType<TMPro.TMP_InputField>(UnityEngine.FindObjectsSortMode.None))
-            if (f.isFocused) return true;
-        foreach (var f in UnityEngine.Object.FindObjectsByType<UnityEngine.UI.InputField>(UnityEngine.FindObjectsSortMode.None))
-            if (f.isFocused) return true;
-        return false;
-    }
-
     private void Update()
     {
         if (UnityEngine.InputSystem.Keyboard.current == null) return;
         if (!UnityEngine.InputSystem.Keyboard.current.rKey.wasPressedThisFrame) return;
         if (!NetworkManager.Singleton.IsClient) return;
 
-        // Don't spawn while any text input field is focused (e.g. chat).
-        // Scanning by isFocused is more reliable than EventSystem.currentSelectedGameObject
-        // because some games don't route their chat UI through Unity's EventSystem.
-        if (IsAnyInputFieldFocused()) return;
+        // Suppress spawn while the chat input box is open. The game's chat is built with
+        // Unity UI Toolkit (VisualElement) so InputField/TMP scans don't see it.
+        // CustomLevelPlugin patches UIChat.StartInput/StopInput to flip this flag instead.
+        if (CustomLevelPlugin.ChatInputActive) return;
 
         Player player = MonoBehaviourSingleton<PlayerManager>.Instance
             .GetPlayerByClientId(NetworkManager.Singleton.LocalClientId);

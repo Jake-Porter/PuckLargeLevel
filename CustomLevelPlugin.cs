@@ -53,6 +53,25 @@ public class CustomLevelPlugin : IPuckPlugin
                 Debug.Log("[CustomLevel] Patched Server_SpawnPucksForPhase");
             }
 
+            // Track whether the chat input box is open so PuckSpawnSync can suppress R.
+            // UIChat uses Unity UI Toolkit (VisualElement), not InputField/TMP, so we can't
+            // detect it via EventSystem — patching StartInput/StopInput is the only reliable way.
+            var chatStart = typeof(UIChat).GetMethod("StartInput",
+                BindingFlags.Instance | BindingFlags.Public);
+            if (chatStart != null)
+                harmony.Patch(chatStart, null,
+                    new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnChatStartInput)));
+            else
+                Debug.LogWarning("[CustomLevel] UIChat.StartInput not found");
+
+            var chatStop = typeof(UIChat).GetMethod("StopInput",
+                BindingFlags.Instance | BindingFlags.Public);
+            if (chatStop != null)
+                harmony.Patch(chatStop, null,
+                    new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnChatStopInput)));
+            else
+                Debug.LogWarning("[CustomLevel] UIChat.StopInput not found");
+
             // Install network bounds patch immediately — safe before chunks activate
             CL_NetworkBoundsPatch.EnsurePatched();
 
@@ -67,6 +86,11 @@ public class CustomLevelPlugin : IPuckPlugin
     }
 
     public static bool MinimapShowPrefix() => false;
+
+    // True while the player has the chat input box open
+    internal static bool ChatInputActive = false;
+    public static void OnChatStartInput() => ChatInputActive = true;
+    public static void OnChatStopInput()  => ChatInputActive = false;
     public static bool PreventPuckSpawn() => false;
 
     // Blocks the game from despawning pucks we own; PuckSpawnSync removes from the set
@@ -319,6 +343,7 @@ public class CustomLevelPlugin : IPuckPlugin
         new Harmony("com.testlevel.minimap").UnpatchSelf();
         _practiceHelperPatched = false;
         ProtectedPucks.Clear();
+        ChatInputActive = false;
 
         if (spawnedLevel != null) GameObject.Destroy(spawnedLevel);
         if (bundle != null) { bundle.Unload(true); bundle = null; }
