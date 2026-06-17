@@ -180,6 +180,7 @@ public class CustomLevelPlugin : IPuckPlugin
 
             Debug.Log($"[CustomLevel] IsServer={isServer} IsClient={isClient}");
 
+            // Exact-name targets
             string[] toHide = {
                 "Rink", "Hangar", "Blue Goal", "Red Goal", "Goal Blue", "Goal Red",
                 "Scoreboard Blue", "Scoreboard Red", "Lights",
@@ -191,6 +192,18 @@ public class CustomLevelPlugin : IPuckPlugin
             {
                 var go = GameObject.Find(name);
                 if (go != null) { go.SetActive(false); Debug.Log($"[CustomLevel] Hid {name}"); }
+            }
+
+            // Keyword sweep — catches goal/net objects whose names don't match the list above.
+            // The blue net was still visible because its GameObject name wasn't in toHide.
+            string[] hideKeywords = { "goal", "net" };
+            foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                if (root == null) continue;
+                string lower = root.name.ToLowerInvariant();
+                foreach (string kw in hideKeywords)
+                    if (lower.Contains(kw))
+                    { root.SetActive(false); Debug.Log($"[CustomLevel] Hid (keyword '{kw}'): {root.name}"); break; }
             }
 
             if (bundle == null) { Debug.LogError("[CustomLevel] Bundle is null"); return; }
