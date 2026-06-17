@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEngine;
@@ -93,6 +94,40 @@ public class CustomLevelPlugin : IPuckPlugin
         }
     }
 
+    private static readonly string[] _hideKeywords = { "goal", "net" };
+
+    // Hides every active GameObject whose name contains a goal/net keyword.
+    // Searches all objects in the active scene, not just root objects, so it catches
+    // objects parented under differently-named containers.
+    internal static void HideByKeyword()
+    {
+        foreach (var go in GameObject.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
+        {
+            if (go == null) continue;
+            string lower = go.name.ToLowerInvariant();
+            foreach (string kw in _hideKeywords)
+                if (lower.Contains(kw))
+                { go.SetActive(false); Debug.Log($"[CustomLevel] Hid (keyword '{kw}'): {go.name}"); break; }
+        }
+    }
+
+    // Called when the game network-spawns an object after level load (e.g. the goal nets).
+    // We re-run the keyword check so any newly spawned goal/net objects are hidden too.
+    public static void OnSynchronizedObjectSpawned(Dictionary<string, object> msg)
+    {
+        if (msg["synchronizedObject"] is SynchronizedObject obj && obj != null)
+        {
+            string lower = obj.name.ToLowerInvariant();
+            foreach (string kw in _hideKeywords)
+                if (lower.Contains(kw))
+                {
+                    obj.gameObject.SetActive(false);
+                    Debug.Log($"[CustomLevel] Hid spawned object (keyword '{kw}'): {obj.name}");
+                    break;
+                }
+        }
+    }
+
     public static bool MinimapShowPrefix() => false;
 
     // True while the player has the chat input box open
@@ -173,6 +208,10 @@ public class CustomLevelPlugin : IPuckPlugin
 
             CL_NetworkBoundsPatch.EnableChunks();
 
+            // Catch goal/net objects that the game spawns via Netcode after level-awake
+            EventManager.AddEventListener("Event_Everyone_OnSynchronizedObjectSpawned",
+                new Action<Dictionary<string, object>>(OnSynchronizedObjectSpawned));
+
             bool isServer = NetworkManager.Singleton?.IsServer ?? true;
             bool isClient = NetworkManager.Singleton?.IsClient ?? true;
             // Offline / solo play: treat the local instance as both server and client
@@ -194,17 +233,10 @@ public class CustomLevelPlugin : IPuckPlugin
                 if (go != null) { go.SetActive(false); Debug.Log($"[CustomLevel] Hid {name}"); }
             }
 
-            // Keyword sweep — catches goal/net objects whose names don't match the list above.
-            // The blue net was still visible because its GameObject name wasn't in toHide.
-            string[] hideKeywords = { "goal", "net" };
-            foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
-            {
-                if (root == null) continue;
-                string lower = root.name.ToLowerInvariant();
-                foreach (string kw in hideKeywords)
-                    if (lower.Contains(kw))
-                    { root.SetActive(false); Debug.Log($"[CustomLevel] Hid (keyword '{kw}'): {root.name}"); break; }
-            }
+            // Keyword sweep — searches every GameObject in the scene (not just roots) because the
+            // blue net was still visible even though "Blue Goal" / "Red Goal" were hidden.
+            // The net may be a sibling object rather than a child of the goal posts.
+            HideByKeyword();
 
             if (bundle == null) { Debug.LogError("[CustomLevel] Bundle is null"); return; }
 
@@ -360,6 +392,8 @@ public class CustomLevelPlugin : IPuckPlugin
     public bool OnDisable()
     {
         CL_NetworkBoundsPatch.Disable();
+        EventManager.RemoveEventListener("Event_Everyone_OnSynchronizedObjectSpawned",
+            new Action<Dictionary<string, object>>(OnSynchronizedObjectSpawned));
         harmony?.UnpatchSelf();
         new Harmony("com.testlevel.minimap").UnpatchSelf();
         _practiceHelperPatched = false;
