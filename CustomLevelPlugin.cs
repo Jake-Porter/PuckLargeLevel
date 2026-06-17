@@ -219,7 +219,7 @@ public class CustomLevelPlugin : IPuckPlugin
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (despawnPuck != null)
                 {
-                    harmony.Patch(despawnPuck,
+                    _harmony.Patch(despawnPuck,
                         new HarmonyMethod(typeof(CustomLevelPlugin), nameof(PreventPuckDespawn)));
                     Debug.Log("[CustomLevel] Patched PuckManager.Server_DespawnPuck");
                 }
@@ -235,7 +235,7 @@ public class CustomLevelPlugin : IPuckPlugin
                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                     if (m != null)
                     {
-                        harmony.Patch(m, new HarmonyMethod(typeof(CustomLevelPlugin), nameof(PreventPuckMove)));
+                        _harmony.Patch(m, new HarmonyMethod(typeof(CustomLevelPlugin), nameof(PreventPuckMove)));
                         Debug.Log($"[CustomLevel] Patched PuckManager.{mn}");
                     }
                 }

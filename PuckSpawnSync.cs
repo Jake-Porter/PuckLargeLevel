@@ -79,8 +79,7 @@ public class PuckSpawnSync : MonoBehaviour
 
         // Force-register the chunk slot immediately so the very first gather tick encodes
         // chunk-local instead of leaving a corrupted overflowed short in the packet
-        SynchronizedObject syncObj = newPuck as SynchronizedObject
-            ?? newPuck.GetComponent<SynchronizedObject>();
+        SynchronizedObject syncObj = newPuck.GetComponent<SynchronizedObject>();
         if (syncObj != null)
             CL_ChunkSyncServer.InitSlot(syncObj);
 
