@@ -53,15 +53,6 @@ public class CustomLevelPlugin : IPuckPlugin
                 Debug.Log("[CustomLevel] Patched Server_SpawnPucksForPhase");
             }
 
-            var onFall = typeof(PlayerBody).GetMethod("OnFall",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (onFall != null)
-            {
-                harmony.Patch(onFall, new HarmonyMethod(typeof(CustomLevelPlugin),
-                    nameof(PreventFall)));
-                Debug.Log("[CustomLevel] Patched PlayerBody.OnFall");
-            }
-
             // Install network bounds patch immediately — safe before chunks activate
             CL_NetworkBoundsPatch.EnsurePatched();
 
@@ -75,7 +66,6 @@ public class CustomLevelPlugin : IPuckPlugin
         }
     }
 
-    public static bool PreventFall() => false;
     public static bool MinimapShowPrefix() => false;
     public static bool PreventPuckSpawn() => false;
 
