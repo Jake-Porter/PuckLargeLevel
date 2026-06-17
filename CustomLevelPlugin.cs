@@ -56,26 +56,34 @@ public class CustomLevelPlugin : IPuckPlugin
             // Track whether the chat input box is open so PuckSpawnSync can suppress R.
             // UIChat uses Unity UI Toolkit (VisualElement), not InputField/TMP, so we can't
             // detect it via EventSystem — patching StartInput/StopInput is the only reliable way.
+            // UIChat only exists on clients — dedicated servers won't find it, which is fine
             var chatStart = typeof(UIChat).GetMethod("StartInput",
                 BindingFlags.Instance | BindingFlags.Public);
             if (chatStart != null)
                 harmony.Patch(chatStart, null,
                     new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnChatStartInput)));
-            else
-                Debug.LogWarning("[CustomLevel] UIChat.StartInput not found");
 
             var chatStop = typeof(UIChat).GetMethod("StopInput",
                 BindingFlags.Instance | BindingFlags.Public);
             if (chatStop != null)
                 harmony.Patch(chatStop, null,
                     new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnChatStopInput)));
-            else
-                Debug.LogWarning("[CustomLevel] UIChat.StopInput not found");
 
             // Install network bounds patch immediately — safe before chunks activate
             CL_NetworkBoundsPatch.EnsurePatched();
 
-            Debug.Log("[CustomLevel] Plugin enabled, waiting for level load");
+            // When loaded from the Steam Workshop the mod is enabled after the server has
+            // already initialised the scene, so LevelController.Awake fires before our
+            // postfix is installed and OnLevelAwake never runs. Catch that case here.
+            if (GameObject.FindFirstObjectByType<LevelController>() != null)
+            {
+                Debug.Log("[CustomLevel] Level already active at plugin load — running OnLevelAwake immediately.");
+                OnLevelAwake();
+            }
+            else
+            {
+                Debug.Log("[CustomLevel] Plugin enabled, waiting for level load");
+            }
             return true;
         }
         catch (Exception e)
