@@ -45,8 +45,15 @@ public class PuckSpawnSync : MonoBehaviour
             Debug.Log($"[CustomLevel] Despawned previous puck for client {senderClientId}");
         }
 
+        // Place the puck 2 m in front of the player, then raycast down to find the floor surface.
+        // Without the raycast the puck spawns at player.y which can clip through geometry when
+        // the player is crouching (ctrl held) or standing on an angled surface.
         Vector3 spawnPos = position + forward * 2f;
-        spawnPos.y = position.y + 0.1f;
+        spawnPos.y = position.y + 5f; // start the ray well above the player's feet
+        if (Physics.Raycast(spawnPos, Vector3.down, out RaycastHit hit, 30f))
+            spawnPos.y = hit.point.y + 0.05f; // just above whatever surface is below
+        else
+            spawnPos.y = position.y + 0.1f;   // fallback if nothing is underneath
 
         Puck newPuck = null;
         try
@@ -85,14 +92,14 @@ public class PuckSpawnSync : MonoBehaviour
 
         // Inherit the player's velocity so the puck doesn't appear stationary when spawned mid-skate
         Player player = MonoBehaviourSingleton<PlayerManager>.Instance.GetPlayerByClientId(senderClientId);
-        if (player?.PlayerBody != null && newPuck != null)
+        if (player?.PlayerBody != null)
         {
             Rigidbody prb = player.PlayerBody.GetComponent<Rigidbody>();
             Rigidbody nrb = newPuck.GetComponent<Rigidbody>();
             if (prb != null && nrb != null) nrb.linearVelocity = prb.linearVelocity;
         }
 
-        Debug.Log($"[CustomLevel] Spawned puck for client {senderClientId}");
+        Debug.Log($"[CustomLevel] Spawned puck for client {senderClientId} at {spawnPos}");
     }
 
     private void Update()
@@ -100,6 +107,14 @@ public class PuckSpawnSync : MonoBehaviour
         if (UnityEngine.InputSystem.Keyboard.current == null) return;
         if (!UnityEngine.InputSystem.Keyboard.current.rKey.wasPressedThisFrame) return;
         if (!NetworkManager.Singleton.IsClient) return;
+
+        // Don't spawn while the player is typing in any UI text field (e.g. chat)
+        GameObject selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
+        if (selected != null)
+        {
+            if (selected.GetComponent<UnityEngine.UI.InputField>() != null) return;
+            if (selected.GetComponent<TMPro.TMP_InputField>() != null) return;
+        }
 
         Player player = MonoBehaviourSingleton<PlayerManager>.Instance
             .GetPlayerByClientId(NetworkManager.Singleton.LocalClientId);
