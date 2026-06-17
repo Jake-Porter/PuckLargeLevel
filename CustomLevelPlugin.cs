@@ -15,6 +15,10 @@ public class CustomLevelPlugin : IPuckPlugin
     // Kept static so TryPatchPracticeHelpers can access it after OnEnable returns
     private static Harmony _harmony;
 
+    // Pucks we spawned that should not be touched by the game's out-of-bounds / face-off systems
+    internal static readonly System.Collections.Generic.HashSet<Puck> ProtectedPucks =
+        new System.Collections.Generic.HashSet<Puck>();
+
     public static AssetBundle GetBundle() => bundle;
 
     public bool OnEnable()
@@ -74,6 +78,17 @@ public class CustomLevelPlugin : IPuckPlugin
     public static bool PreventFall() => false;
     public static bool MinimapShowPrefix() => false;
     public static bool PreventPuckSpawn() => false;
+
+    // Blocks the game from despawning pucks we own; PuckSpawnSync removes from the set
+    // before calling Server_DespawnPuck itself, so our own despawns still go through
+    public static bool PreventPuckDespawn(Puck puck) => !ProtectedPucks.Contains(puck);
+
+    // Blocks the game from teleporting our pucks to face-off / reset positions
+    public static bool PreventPuckMove(Puck __instance, ref Vector3 position)
+    {
+        if (ProtectedPucks.Contains(__instance)) return false;
+        return true;
+    }
 
     public static bool PreventClamp(object __instance, ref Vector3 __result, Vector3 position)
     {
@@ -198,6 +213,32 @@ public class CustomLevelPlugin : IPuckPlugin
                 var syncObj = new GameObject("PuckSpawnSync");
                 syncObj.AddComponent<PuckSpawnSync>();
                 Debug.Log("[CustomLevel] PuckSpawnSync added");
+
+                // Prevent the game's out-of-bounds / face-off logic from touching our custom pucks
+                var despawnPuck = typeof(PuckManager).GetMethod("Server_DespawnPuck",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (despawnPuck != null)
+                {
+                    harmony.Patch(despawnPuck,
+                        new HarmonyMethod(typeof(CustomLevelPlugin), nameof(PreventPuckDespawn)));
+                    Debug.Log("[CustomLevel] Patched PuckManager.Server_DespawnPuck");
+                }
+                else
+                    Debug.LogWarning("[CustomLevel] PuckManager.Server_DespawnPuck not found");
+
+                // Try common names for the method that teleports a puck to a face-off / reset spot
+                string[] moveMethods = { "Server_MovePuck", "Server_ResetPuck", "Server_FaceOffDrop",
+                                         "Server_MovePuckToFaceOff", "Server_SetPuckPosition" };
+                foreach (string mn in moveMethods)
+                {
+                    var m = typeof(PuckManager).GetMethod(mn,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (m != null)
+                    {
+                        harmony.Patch(m, new HarmonyMethod(typeof(CustomLevelPlugin), nameof(PreventPuckMove)));
+                        Debug.Log($"[CustomLevel] Patched PuckManager.{mn}");
+                    }
+                }
             }
 
             if (isClient)
@@ -287,6 +328,7 @@ public class CustomLevelPlugin : IPuckPlugin
         harmony?.UnpatchSelf();
         new Harmony("com.testlevel.minimap").UnpatchSelf();
         _practiceHelperPatched = false;
+        ProtectedPucks.Clear();
 
         if (spawnedLevel != null) GameObject.Destroy(spawnedLevel);
         if (bundle != null) { bundle.Unload(true); bundle = null; }

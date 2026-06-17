@@ -23,6 +23,9 @@ public class PuckSpawnSync : MonoBehaviour
     {
         NetworkManager.Singleton?.CustomMessagingManager?
             .UnregisterNamedMessageHandler(SpawnPuckMessage);
+        // Clean up any pucks we were protecting in case they weren't explicitly despawned
+        foreach (var puck in playerPucks.Values)
+            if (puck != null) CustomLevelPlugin.ProtectedPucks.Remove(puck);
     }
 
     private void OnSpawnPuckMessageReceived(ulong senderClientId, FastBufferReader reader)
@@ -33,9 +36,11 @@ public class PuckSpawnSync : MonoBehaviour
         Vector3 position = new Vector3(px, py, pz);
         Vector3 forward = new Vector3(fx, fy, fz);
 
-        // Despawn the player's previous puck so they never hold more than one at a time
+        // Despawn the player's previous puck so they never hold more than one at a time.
+        // Remove from ProtectedPucks first so our own despawn call isn't blocked by the guard.
         if (playerPucks.TryGetValue(senderClientId, out Puck prev) && prev != null)
         {
+            CustomLevelPlugin.ProtectedPucks.Remove(prev);
             MonoBehaviourSingleton<PuckManager>.Instance.Server_DespawnPuck(prev);
             Debug.Log($"[CustomLevel] Despawned previous puck for client {senderClientId}");
         }
@@ -61,7 +66,23 @@ public class PuckSpawnSync : MonoBehaviour
         if (newPuck == null)
             newPuck = MonoBehaviourSingleton<PuckManager>.Instance.Server_SpawnPuck(spawnPos, Quaternion.identity);
 
+        if (newPuck == null)
+        {
+            Debug.LogWarning($"[CustomLevel] Failed to spawn puck for client {senderClientId}");
+            return;
+        }
+
         playerPucks[senderClientId] = newPuck;
+
+        // Guard this puck from the game's out-of-bounds / face-off reset systems
+        CustomLevelPlugin.ProtectedPucks.Add(newPuck);
+
+        // Force-register the chunk slot immediately so the very first gather tick encodes
+        // chunk-local instead of leaving a corrupted overflowed short in the packet
+        SynchronizedObject syncObj = newPuck as SynchronizedObject
+            ?? newPuck.GetComponent<SynchronizedObject>();
+        if (syncObj != null)
+            CL_ChunkSyncServer.InitSlot(syncObj);
 
         // Inherit the player's velocity so the puck doesn't appear stationary when spawned mid-skate
         Player player = MonoBehaviourSingleton<PlayerManager>.Instance.GetPlayerByClientId(senderClientId);
