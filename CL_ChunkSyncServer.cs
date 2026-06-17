@@ -21,6 +21,10 @@ public static class CL_ChunkSyncServer
     private static readonly List<SynchronizedObject> _tracked = new List<SynchronizedObject>();
     private static FieldInfo _tickIdField;
 
+    // Actual world positions captured each GatherPrefix so GatherPostfix can encode without
+    // touching the already-overflowed shorts that vanilla wrote
+    internal static readonly Dictionary<ushort, Vector3> PositionCache = new Dictionary<ushort, Vector3>();
+
     public static void Enable()
     {
         if (_enabled) return;
@@ -68,6 +72,7 @@ public static class CL_ChunkSyncServer
         if (!_enabled) return;
         _enabled = false;
         _tracked.Clear();
+        PositionCache.Clear();
         EventManager.RemoveEventListener("Event_Everyone_OnSynchronizedObjectSpawned",
             new Action<Dictionary<string, object>>(OnSpawned));
         EventManager.RemoveEventListener("Event_Everyone_OnSynchronizedObjectDespawned",
@@ -114,6 +119,7 @@ public static class CL_ChunkSyncServer
 
             ushort id = (ushort)obj.NetworkObjectId;
             Vector3 pos = obj.transform.position;
+            PositionCache[id] = pos;
 
             if (!CL_ChunkRegistry.TryGet(id, out ChunkSlot slot))
             { InitSlot(obj); continue; }

@@ -140,9 +140,19 @@ public static class CL_ChunkSyncClient
         ushort id = (ushort)obj.NetworkObjectId;
 
         // If chunks are active but we have no slot yet, hold the object in place until
-        // the server's chunk announcement arrives; avoids a decode with offset = 0
+        // the server's chunk announcement arrives; avoids applying an offset of zero
         if (CL_ChunkRegistry.ChunksActive && !CL_ChunkRegistry.TryGet(id, out _))
         { position = obj.transform.position; return; }
+
+        // Vanilla decoded chunk-local shorts to a chunk-local float. Add the chunk origin here
+        // to get the true world position. Doing this in the short layer (SyncPrefix) would
+        // overflow the short again, so we expand at the float stage instead.
+        if (CL_ChunkRegistry.TryGet(id, out ChunkSlot slot))
+        {
+            ChunkCoord c = slot.ResolveAt(CL_ChunkRegistry.CurrentDecodeTickId);
+            position.x += c.X * CL_ChunkRegistry.ChunkSize;
+            position.z += c.Z * CL_ChunkRegistry.ChunkSize;
+        }
 
         _filter.TryGetValue(id, out FilterState fs);
         if (!fs.Initialized)
