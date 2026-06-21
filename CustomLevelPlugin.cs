@@ -13,10 +13,10 @@ public class CustomLevelPlugin : IPuckPlugin
     private static AssetBundle bundle;
     private Harmony harmony;
     private static bool _practiceHelperPatched;
-    // Kept static so TryPatchPracticeHelpers can access it after OnEnable returns
+    // Static so TryPatchPracticeHelpers can reach it after OnEnable returns
     private static Harmony _harmony;
 
-    // Pucks we spawned that should not be touched by the game's out-of-bounds / face-off systems
+    // Pucks we spawned — excluded from the game's out-of-bounds and face-off logic
     internal static readonly System.Collections.Generic.HashSet<Puck> ProtectedPucks =
         new System.Collections.Generic.HashSet<Puck>();
 
@@ -54,10 +54,9 @@ public class CustomLevelPlugin : IPuckPlugin
                 Debug.Log("[CustomLevel] Patched Server_SpawnPucksForPhase");
             }
 
-            // Track whether the chat input box is open so PuckSpawnSync can suppress R.
-            // UIChat uses Unity UI Toolkit (VisualElement), not InputField/TMP, so we can't
-            // detect it via EventSystem — patching StartInput/StopInput is the only reliable way.
-            // UIChat only exists on clients — dedicated servers won't find it, which is fine
+            // UIChat uses UI Toolkit (VisualElement), not InputField/TMP, so we can't detect
+            // the chat box via EventSystem — patching StartInput/StopInput is the only reliable way.
+            // UIChat only exists on clients, so dedicated servers will simply not find these methods.
             var chatStart = typeof(UIChat).GetMethod("StartInput",
                 BindingFlags.Instance | BindingFlags.Public);
             if (chatStart != null)
@@ -70,12 +69,19 @@ public class CustomLevelPlugin : IPuckPlugin
                 harmony.Patch(chatStop, null,
                     new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnChatStopInput)));
 
+            var sendChat = typeof(ChatManager).GetMethod("Client_SendChatMessage",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (sendChat != null)
+                harmony.Patch(sendChat,
+                    new HarmonyMethod(typeof(CustomLevelPlugin), nameof(OnClientSendChatMessage)));
+            else
+                Debug.LogWarning("[CustomLevel] ChatManager.Client_SendChatMessage not found");
+
             // Install network bounds patch immediately — safe before chunks activate
             CL_NetworkBoundsPatch.EnsurePatched();
 
-            // When loaded from the Steam Workshop the mod is enabled after the server has
-            // already initialised the scene, so LevelController.Awake fires before our
-            // postfix is installed and OnLevelAwake never runs. Catch that case here.
+            // When loaded via Steam Workshop the mod may enable after LevelController.Awake has
+            // already fired, so our postfix would never run. Detect that case and run it now.
             if (GameObject.FindFirstObjectByType<LevelController>() != null)
             {
                 Debug.Log("[CustomLevel] Level already active at plugin load — running OnLevelAwake immediately.");
@@ -96,14 +102,84 @@ public class CustomLevelPlugin : IPuckPlugin
 
     public static bool MinimapShowPrefix() => false;
 
-    // True while the player has the chat input box open
+    // True while the player has the chat input box open; used by PuckSpawnSync to suppress R
     internal static bool ChatInputActive = false;
     public static void OnChatStartInput() => ChatInputActive = true;
     public static void OnChatStopInput()  => ChatInputActive = false;
+
+    // Harmony prefix on ChatManager.Client_SendChatMessage — intercepts /timeset before it
+    // reaches the server. Returns false to suppress the message; true to pass it through.
+    public static bool OnClientSendChatMessage(string content, bool isQuickChat, bool isTeamChat)
+    {
+        if (isQuickChat || string.IsNullOrEmpty(content)) return true;
+        string trimmed = content.Trim();
+        if (!trimmed.StartsWith("/timeset", System.StringComparison.OrdinalIgnoreCase)) return true;
+
+        string arg = trimmed.Length > 8 ? trimmed.Substring(8).Trim() : "";
+        if (arg.Equals("auto", System.StringComparison.OrdinalIgnoreCase))
+        {
+            LevelDayNightCycle.ManualHour = null;
+            LevelDayNightCycle.Instance?.ForceUpdate();
+            ShowLocalChat("[CustomLevel] Time set to auto (system clock)");
+        }
+        else if (int.TryParse(arg, out int hhmm))
+        {
+            int h = hhmm / 100, m = hhmm % 100;
+            if (h >= 0 && h <= 23 && m >= 0 && m <= 59)
+            {
+                LevelDayNightCycle.ManualHour = h + m / 60f;
+                LevelDayNightCycle.Instance?.ForceUpdate();
+                ShowLocalChat($"[CustomLevel] Time set to {h:D2}:{m:D2}");
+            }
+            else
+                ShowLocalChat("[CustomLevel] Usage: /timeset HHMM  or  /timeset auto");
+        }
+        else
+            ShowLocalChat("[CustomLevel] Usage: /timeset HHMM  or  /timeset auto");
+
+        return false;
+    }
+
+    // Displays a local-only system message in the chat UI.
+    // UIChat.AddChatMessage takes a ChatMessage struct, not a plain string — ChatMessage.Content
+    // is FixedString512Bytes, so we build it via reflection to avoid a hard assembly dependency.
+    private static void ShowLocalChat(string msg)
+    {
+        try
+        {
+            var uiChat = GameObject.FindFirstObjectByType<UIChat>();
+            if (uiChat == null) return;
+            var addMsg = typeof(UIChat).GetMethod("AddChatMessage",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (addMsg == null) return;
+
+            var chatMsgType = typeof(ChatMessage);
+            var chatMsg = System.Activator.CreateInstance(chatMsgType);
+            var contentField = chatMsgType.GetField("Content",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var isSystemField = chatMsgType.GetField("IsSystem",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+            if (contentField != null)
+            {
+                var fsType = contentField.FieldType;
+                var fsInstance = System.Activator.CreateInstance(fsType, new object[] { msg });
+                contentField.SetValue(chatMsg, fsInstance);
+            }
+            isSystemField?.SetValue(chatMsg, true);
+
+            addMsg.Invoke(uiChat, new object[] { chatMsg, Units.Imperial, false });
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[CustomLevel] ShowLocalChat failed: {e.Message}");
+        }
+    }
+
     public static bool PreventPuckSpawn() => false;
 
-    // Blocks the game from despawning pucks we own; PuckSpawnSync removes from the set
-    // before calling Server_DespawnPuck itself, so our own despawns still go through
+    // Allows our own despawns through (PuckSpawnSync removes from set before calling despawn)
+    // but blocks the game from despawning any puck we still own
     public static bool PreventPuckDespawn(Puck puck) => !ProtectedPucks.Contains(puck);
 
     // Blocks the game from teleporting our pucks to face-off / reset positions
@@ -127,8 +203,8 @@ public class CustomLevelPlugin : IPuckPlugin
         return false;
     }
 
-    // MaxPractice is an optional plugin; we defer patching until the level loads so it
-    // has time to register its assembly before we search for it
+    // MaxPractice is optional — defer patching until level load so it has time to
+    // register its assembly before we search for it
     private static void TryPatchPracticeHelpers()
     {
         if (_practiceHelperPatched) return;
@@ -157,7 +233,7 @@ public class CustomLevelPlugin : IPuckPlugin
         try
         {
             // LevelController.Awake fires for every scene that has one — including the locker room.
-            // We only want to swap geometry in the actual game level scene.
+            // Only swap geometry in the actual game level.
             string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
             if (sceneName != "level_default")
             {
@@ -165,8 +241,7 @@ public class CustomLevelPlugin : IPuckPlugin
                 return;
             }
 
-            // Destroy any level geometry left over from a previous session so we never
-            // accumulate stacked copies across scene transitions.
+            // Destroy geometry left over from a previous session to avoid stacked copies
             if (spawnedLevel != null) { GameObject.Destroy(spawnedLevel); spawnedLevel = null; }
             if (spawnedClientLevel != null) { GameObject.Destroy(spawnedClientLevel); spawnedClientLevel = null; }
 
@@ -190,14 +265,13 @@ public class CustomLevelPlugin : IPuckPlugin
 
             bool isServer = NetworkManager.Singleton?.IsServer ?? true;
             bool isClient = NetworkManager.Singleton?.IsClient ?? true;
-            // Offline / solo play: treat the local instance as both server and client
+            // Offline / solo play — treat the local instance as both server and client
             if (!isServer && !isClient) { isServer = true; isClient = true; }
 
             Debug.Log($"[CustomLevel] IsServer={isServer} IsClient={isClient}");
 
-            // Build a lookup set so we can check every GameObject's name in one pass.
-            // GameObject.Find returns only the FIRST match, so two nets (one per goal)
-            // would leave the second one visible — iterating all objects avoids that.
+            // Use a HashSet for name lookups — GameObject.Find returns only the first match,
+            // so two nets (one per goal) would leave the second one visible without this approach
             var hideNames = new System.Collections.Generic.HashSet<string>(
                 System.StringComparer.Ordinal)
             {
@@ -243,6 +317,9 @@ public class CustomLevelPlugin : IPuckPlugin
                 foreach (Renderer r in serverLevel.GetComponentsInChildren<Renderer>(true))
                     if (r != null) r.enabled = false;
 
+                foreach (Light l in serverLevel.GetComponentsInChildren<Light>(true))
+                    if (l != null) l.enabled = false;
+
                 spawnedLevel = serverLevel;
                 Debug.Log("[CustomLevel] Server level spawned (colliders only)");
 
@@ -257,7 +334,6 @@ public class CustomLevelPlugin : IPuckPlugin
                 syncObj.AddComponent<PuckSpawnSync>();
                 Debug.Log("[CustomLevel] PuckSpawnSync added");
 
-                // Prevent the game's out-of-bounds / face-off logic from touching our custom pucks
                 var despawnPuck = typeof(PuckManager).GetMethod("Server_DespawnPuck",
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (despawnPuck != null)
@@ -286,7 +362,11 @@ public class CustomLevelPlugin : IPuckPlugin
 
             if (isClient)
             {
-                // Re-apply bundle materials by matching renderer/slot name because Instantiate loses
+                var fixerObj = new GameObject("TerrainBasemapEnforcer");
+                fixerObj.AddComponent<TerrainBasemapEnforcer>();
+                Debug.Log("[CustomLevel] TerrainBasemapEnforcer started");
+
+                // Re-apply bundle materials by matching renderer/slot name — Instantiate loses
                 // bundle material references on the client side
                 var materials = new System.Collections.Generic.Dictionary<string, Material>();
                 foreach (string assetName in bundle.GetAllAssetNames())
@@ -309,6 +389,9 @@ public class CustomLevelPlugin : IPuckPlugin
                 GameObject clientLevel = spawnedClientLevel;
                 clientLevel.name = "CustomLevel_Client";
                 clientLevel.transform.position = Vector3.zero;
+
+                clientLevel.AddComponent<LevelDayNightCycle>();
+                Debug.Log("[CustomLevel] LevelDayNightCycle started");
 
                 // Client only needs visuals; remove colliders to avoid duplicate physics
                 foreach (Collider c in clientLevel.GetComponentsInChildren<Collider>(true))
@@ -375,6 +458,7 @@ public class CustomLevelPlugin : IPuckPlugin
         ProtectedPucks.Clear();
         ChatInputActive = false;
 
+        LevelDayNightCycle.ManualHour = null;
         if (spawnedLevel != null) { GameObject.Destroy(spawnedLevel); spawnedLevel = null; }
         if (spawnedClientLevel != null) { GameObject.Destroy(spawnedClientLevel); spawnedClientLevel = null; }
         if (bundle != null) { bundle.Unload(true); bundle = null; }
